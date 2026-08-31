@@ -9,9 +9,11 @@ create table if not exists businesses (
   currency text not null default 'USD',
   country text,
   timezone text default 'UTC',
+  subscription text not null default 'free',
   health_score int default 50 check (health_score between 0 and 100),
   created_at timestamptz not null default now()
 );
+alter table businesses add column if not exists subscription text not null default 'free';
 create index if not exists idx_businesses_user on businesses(user_id);
 
 create table if not exists customers (
@@ -55,26 +57,18 @@ create index if not exists idx_insights_business on ai_insights(business_id,crea
 
 -- Automatically provision a default business after a user signs up.
 create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
+returns trigger language plpgsql security definer set search_path = public
 as $$
 begin
   insert into public.businesses (user_id, business_name, industry)
-  values (
-    new.id,
-    coalesce(nullif(new.raw_user_meta_data->>'business_name',''), 'My Business'),
-    coalesce(nullif(new.raw_user_meta_data->>'industry',''), 'General')
-  )
+  values (new.id, coalesce(nullif(new.raw_user_meta_data->>'business_name',''), 'My Business'), coalesce(nullif(new.raw_user_meta_data->>'industry',''), 'General'))
   on conflict do nothing;
   return new;
 end;
 $$;
 
 drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-after insert on auth.users
-for each row execute procedure public.handle_new_user();
+create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
 
 alter table businesses enable row level security;
 alter table customers enable row level security;
@@ -83,16 +77,12 @@ alter table sales enable row level security;
 alter table expenses enable row level security;
 alter table ai_insights enable row level security;
 
--- RLS uses the authenticated user's ownership of the business.
 drop policy if exists businesses_owner on businesses;
 create policy businesses_owner on businesses for all using (user_id=auth.uid()) with check (user_id=auth.uid());
-
 drop policy if exists tenant_customers on customers;
 create policy tenant_customers on customers for all using (exists(select 1 from businesses b where b.id=customers.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=customers.business_id and b.user_id=auth.uid()));
 drop policy if exists tenant_leads on leads;
 create policy tenant_leads on leads for all using (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid()));
-drop policy if exists tenant_sales on sales;
-create policy tenant_sales on sales for all using (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid()));
 drop policy if exists tenant_sales on sales;
 create policy tenant_sales on sales for all using (exists(select 1 from businesses b where b.id=sales.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=sales.business_id and b.user_id=auth.uid()));
 drop policy if exists tenant_expenses on expenses;
