@@ -53,6 +53,29 @@ create table if not exists ai_insights (
 );
 create index if not exists idx_insights_business on ai_insights(business_id,created_at desc);
 
+-- Automatically provision a default business after a user signs up.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.businesses (user_id, business_name, industry)
+  values (
+    new.id,
+    coalesce(nullif(new.raw_user_meta_data->>'business_name',''), 'My Business'),
+    coalesce(nullif(new.raw_user_meta_data->>'industry',''), 'General')
+  )
+  on conflict do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute procedure public.handle_new_user();
+
 alter table businesses enable row level security;
 alter table customers enable row level security;
 alter table leads enable row level security;
@@ -68,6 +91,8 @@ drop policy if exists tenant_customers on customers;
 create policy tenant_customers on customers for all using (exists(select 1 from businesses b where b.id=customers.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=customers.business_id and b.user_id=auth.uid()));
 drop policy if exists tenant_leads on leads;
 create policy tenant_leads on leads for all using (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid()));
+drop policy if exists tenant_sales on sales;
+create policy tenant_sales on sales for all using (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=leads.business_id and b.user_id=auth.uid()));
 drop policy if exists tenant_sales on sales;
 create policy tenant_sales on sales for all using (exists(select 1 from businesses b where b.id=sales.business_id and b.user_id=auth.uid())) with check (exists(select 1 from businesses b where b.id=sales.business_id and b.user_id=auth.uid()));
 drop policy if exists tenant_expenses on expenses;
